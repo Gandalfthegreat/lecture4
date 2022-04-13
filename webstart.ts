@@ -1,11 +1,14 @@
 import {compile, run} from './compiler';
+import { output } from './webpack.config';
 
 
 document.addEventListener("DOMContentLoaded", async () => {
   function display(arg : string) {
-    const elt = document.createElement("pre");
-    document.getElementById("output").appendChild(elt);
-    elt.innerText = arg;
+    const output = document.getElementById("output");
+    output.textContent += arg + "\n";
+    // const elt = document.createElement("pre");
+    // document.getElementById("output").appendChild(elt);
+    // elt.innerText = arg + "\n";
   }
   var importObject = {
     imports: {
@@ -30,6 +33,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   runButton.addEventListener("click", async () => {
     const program = userCode.value;
     const output = document.getElementById("output");
+    output.innerHTML = "";
     try {
       const wat = compile(program);
       const code = document.getElementById("generated-code");
