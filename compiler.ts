@@ -1,28 +1,37 @@
 import wabt from 'wabt';
-import {Stmt, Expr, Type, Op} from './ast';
-import {parseProgram} from './parser';
+import { Stmt, Expr, Type, Op } from './ast';
+import { parseProgram } from './parser';
 import { tcProgram } from './tc';
 
 type Env = Map<string, boolean>;
 
-function variableNames(stmts: Stmt<Type>[]) : string[] {
-  const vars : Array<string> = [];
+function variableNames(stmts: Stmt<Type>[]): string[] {
+  const vars: Array<string> = [];
   stmts.forEach((stmt) => {
-    if(stmt.tag === "assign") { vars.push(stmt.name); }
+    if (stmt.tag === "assign") { vars.push(stmt.name); }
   });
   return vars;
 }
-function funs(stmts: Stmt<Type>[]) : Stmt<Type>[] {
+function funs(stmts: Stmt<Type>[]): Stmt<Type>[] {
   return stmts.filter(stmt => stmt.tag === "define");
 }
-function nonFuns(stmts: Stmt<Type>[]) : Stmt<Type>[] {
+function nonFuns(stmts: Stmt<Type>[]): Stmt<Type>[] {
   return stmts.filter(stmt => stmt.tag !== "define");
 }
-function varsFunsStmts(stmts: Stmt<Type>[]) : [string[], Stmt<Type>[], Stmt<Type>[]] {
+function varsFunsStmts(stmts: Stmt<Type>[]): [string[], Stmt<Type>[], Stmt<Type>[]] {
   return [variableNames(stmts), funs(stmts), nonFuns(stmts)];
 }
 
-export async function run(watSource : string, config: any) : Promise<number> {
+function codeGenStmts(stmts: Stmt<any>[], locals: Env): Array<string> {
+  let stmtsCode: string[] = []
+  stmts.forEach(stmt => {
+    const stmtCode = codeGenStmt(stmt, locals)
+    stmtsCode = stmtsCode.concat(stmtCode)
+  })
+  return stmtsCode
+}
+
+export async function run(watSource: string, config: any): Promise<number> {
   const wabtApi = await wabt();
 
   const parsed = wabtApi.parseWat("example", watSource);
@@ -31,8 +40,8 @@ export async function run(watSource : string, config: any) : Promise<number> {
   return (wasmModule.instance.exports as any)._start();
 }
 
-export function opStmts(op : Op) {
-  switch(op) {
+export function opStmts(op: Op) {
+  switch (op) {
     case "+": return [`i32.add`];
     case "-": return [`i32.sub`];
     case ">": return [`i32.gt_s`];
@@ -43,15 +52,15 @@ export function opStmts(op : Op) {
   }
 }
 
-export function codeGenExpr(expr : Expr<Type>, locals : Env) : Array<string> {
-  switch(expr.tag) {
+export function codeGenExpr(expr: Expr<Type>, locals: Env): Array<string> {
+  switch (expr.tag) {
     case "number": return [`(i32.const ${expr.value})`];
     case "true": return [`(i32.const 1)`];
     case "false": return [`(i32.const 0)`];
     case "id":
       // Since we type-checked for making sure all variable exist, here we
       // just check if it's a local variable and assume it is global if not
-      if(locals.has(expr.name)) { return [`(local.get $${expr.name})`]; }
+      if (locals.has(expr.name)) { return [`(local.get $${expr.name})`]; }
       else { return [`(global.get $${expr.name})`]; }
     case "binop": {
       const lhsExprs = codeGenExpr(expr.lhs, locals);
@@ -62,8 +71,8 @@ export function codeGenExpr(expr : Expr<Type>, locals : Env) : Array<string> {
     case "call":
       const valStmts = expr.args.map(e => codeGenExpr(e, locals)).flat();
       let toCall = expr.name;
-      if(expr.name === "print") {
-        switch(expr.args[0].a) {
+      if (expr.name === "print") {
+        switch (expr.args[0].a) {
           case "bool": toCall = "print_bool"; break;
           case "int": toCall = "print_num"; break;
           case "none": toCall = "print_none"; break;
@@ -73,8 +82,8 @@ export function codeGenExpr(expr : Expr<Type>, locals : Env) : Array<string> {
       return valStmts;
   }
 }
-export function codeGenStmt(stmt : Stmt<Type>, locals : Env) : Array<string> {
-  switch(stmt.tag) {
+export function codeGenStmt(stmt: Stmt<Type>, locals: Env): Array<string> {
+  switch (stmt.tag) {
     case "define":
       const withParamsAndVariables = new Map<string, boolean>(locals.entries());
 
@@ -100,21 +109,28 @@ export function codeGenStmt(stmt : Stmt<Type>, locals : Env) : Array<string> {
       return valStmts;
     case "assign":
       var valStmts = codeGenExpr(stmt.value, locals);
-      if(locals.has(stmt.name)) { valStmts.push(`(local.set $${stmt.name})`); }
+      if (locals.has(stmt.name)) { valStmts.push(`(local.set $${stmt.name})`); }
       else { valStmts.push(`(global.set $${stmt.name})`); }
       return valStmts;
     case "expr":
       const result = codeGenExpr(stmt.expr, locals);
       result.push("(local.set $scratch)");
       return result;
+    case "if":
+      const condExpr = codeGenExpr(stmt.cond, locals)
+      let out = condExpr.concat([`(if`]).concat([`(then`])
+      const bodyStmts = codeGenStmts(stmt.body, locals)
+      out = out.concat(bodyStmts).concat([`))`])
+      return out
+
   }
 }
-export function compile(source : string) : string {
+export function compile(source: string): string {
   let ast = parseProgram(source);
   ast = tcProgram(ast);
   const emptyEnv = new Map<string, boolean>();
   const [vars, funs, stmts] = varsFunsStmts(ast);
-  const funsCode : string[] = funs.map(f => codeGenStmt(f, emptyEnv)).map(f => f.join("\n"));
+  const funsCode: string[] = funs.map(f => codeGenStmt(f, emptyEnv)).map(f => f.join("\n"));
   const allFuns = funsCode.join("\n\n");
   const varDecls = vars.map(v => `(global $${v} (mut i32) (i32.const 0))`).join("\n");
 
@@ -126,7 +142,7 @@ export function compile(source : string) : string {
   const isExpr = lastStmt.tag === "expr";
   var retType = "";
   var retVal = "";
-  if(isExpr) {
+  if (isExpr) {
     retType = "(result i32)";
     retVal = "(local.get $scratch)"
   }
